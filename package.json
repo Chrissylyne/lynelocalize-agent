@@ -1,0 +1,10 @@
+{
+  "name": "lynelocalize-agent",
+  "version": "1.0.0",
+  "dependencies": {
+    "node-fetch": "^2",
+    "@supabase/supabase-js": "^2",
+    "@sendgrid/mail": "^7",
+    "@anthropic-ai/sdk": "^0.20"
+  }
+}

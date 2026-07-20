@@ -1,15 +1,5 @@
-// ============================================================================
-// LYNELOCALIZE B2B OUTREACH AGENT - VERCEL CRON + CLAUDE + SENDGRID + SUPABASE
-// ============================================================================
-
-const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
-const Anthropic = require("@anthropic-ai/sdk");
 const sgMail = require("@sendgrid/mail");
 const { createClient } = require("@supabase/supabase-js");
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
 
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
@@ -18,9 +8,70 @@ const supabase = createClient(
   process.env.SUPABASE_KEY
 );
 
-// ============================================================================
-// STEP 1: READ CONTACTS FROM SUPABASE
-// ============================================================================
+// Extract last name from full name
+function getLastName(fullName) {
+  const parts = fullName.trim().split(" ");
+  return parts[parts.length - 1];
+}
+
+// Detect salutation (Herr/Frau) - basic gender detection
+function getSalutation(fullName) {
+  // Frauennamen detection (simplified)
+  const femaleNames = ["Eda", "Ramona", "Stefanie"];
+  const firstName = fullName.trim().split(" ")[0];
+  if (femaleNames.includes(firstName)) {
+    return "Frau";
+  }
+  return "Herr";
+}
+
+// TEST MODE: Deutschsprachige Templates (personalisiert mit Namen)
+function generateEmailBody(contact, articleType) {
+  const lastName = getLastName(contact.name);
+  const salutation = getSalutation(contact.name);
+  const greeting = `${salutation} ${lastName}`;
+
+  const templates = {
+    "mdr-5-risks": `Hallo ${greeting},
+
+ich habe beobachtet, dass ${contact.company} aktiv auf dem französischen Markt wächst. Ein Markteintritt in Frankreich mit einer eigenen Filiale ist eine ausgezeichnete Entscheidung, führt aber auch oft zu regulatorischen Herausforderungen.
+
+Ich habe einen Artikel über die 5 häufigsten Fehler geschrieben, die deutsche MedTech-Unternehmen beim Eintritt in Frankreich machen. Basierend auf 10 Jahren Erfahrung.
+
+Falls interessant, bin ich gerne verfügbar für ein Gespräch.
+
+Viele Grüße,
+Christelle Datouo
+LyneLocalize`,
+
+    "medical-software-localization": `Hallo ${greeting},
+
+Sie haben kritische Software-Tools für medizinische Anwendungen. Eine Lokalisierung ins Französische ist nicht nur Übersetzung, sondern erfordert Anpassung von Compliance, UX und lokaler Regulierung.
+
+Ich habe einen Artikel geschrieben, warum Software-Lokalisierung für medizinische Geräte anders sein muss. Das deckt exakt ab, was Sie bei ${contact.company} jetzt durchlaufen.
+
+Falls Sie daran interessiert sind, können Sie mich gerne kontaktieren.
+
+Viele Grüße,
+Christelle Datouo
+LyneLocalize`,
+
+    "compliance": `Hallo ${greeting},
+
+MDR-Konformität in Frankreich ist nicht nur administrativ – es ist Ihr Markteintritts-Ticket. Ich habe viele Unternehmen wie ${contact.company} gesehen, die 6 Monate bei der Dokumentation verlieren.
+
+Ich habe diesen Prozess für mehrere Unternehmen Ihrer Kategorie implementiert. Ich kenne die Best Practices und was zu viel kostet.
+
+Falls Sie interessiert sind, wie Sie das beschleunigen können, helfe ich gerne.
+
+Viele Grüße,
+Christelle Datouo
+LyneLocalize`,
+  };
+
+  return templates[articleType] || templates["mdr-5-risks"];
+}
+
 async function getContactsToRelance() {
   try {
     const today = new Date().toISOString().split("T")[0];
@@ -39,7 +90,7 @@ async function getContactsToRelance() {
       id: record.id,
       name: record.name || "Contact",
       email: record.email,
-      company: record.company || "Entreprise",
+      company: record.company || "Unternehmen",
       sector: record.sector || "MedTech",
       lastContact: record.last_contact || "N/A",
       responseStatus: record.response_status || "no_response",
@@ -54,91 +105,26 @@ async function getContactsToRelance() {
   }
 }
 
-// ============================================================================
-// STEP 2: EMAIL GENERATION AGENT (Claude API)
-// ============================================================================
-async function generatePersonalizedEmail(contact) {
-  const prompt = `Tu es un expert en outreach B2B pour une consultante en localisation MedTech.
-
-Contact:
-- Nom: ${contact.name}
-- Entreprise: ${contact.company}
-- Secteur: ${contact.sector}
-- Article: ${contact.articleToSend}
-
-Génère un email court (150-200 mots) qui:
-1. Mentionne spécifiquement le contact et son entreprise
-2. Explique pourquoi c'est pertinent pour eux
-3. Termine par un CTA soft ("je suis dispo pour discuter")
-4. Ton: français professionnel, jamais pushy, humain
-
-Réponds UNIQUEMENT avec le body de l'email.`;
-
-  try {
-    const message = await anthropic.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 500,
-      messages: [
-        {
-          role: "user",
-          content: prompt,
-        },
-      ],
-    });
-
-    return message.content[0].type === "text" ? message.content[0].text : null;
-  } catch (error) {
-    console.error("[CLAUDE ERROR]", error);
-    return null;
-  }
+function generateEmailSubject(contact) {
+  const subjects = [
+    `Markteintritt Frankreich: Regulatorische Sicherheit für ${contact.company}`,
+    `Schnelle Frage zu Ihrer Frankreich-Strategie`,
+    `MDR-Compliance in Frankreich: Was Sie wissen sollten`,
+  ];
+  return subjects[contact.id % subjects.length];
 }
 
-// ============================================================================
-// STEP 3: EMAIL SUBJECT GENERATION (Claude)
-// ============================================================================
-async function generateEmailSubject(contact) {
-  const prompt = `Génère un subject line court (5-8 mots) pour un email vers ${contact.name} (${contact.company}).
-Ton: professionnel mais personnel.
-Réponds UNIQUEMENT avec le subject.`;
-
-  try {
-    const message = await anthropic.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 50,
-      messages: [
-        {
-          role: "user",
-          content: prompt,
-        },
-      ],
-    });
-
-    return message.content[0].type === "text"
-      ? message.content[0].text.trim()
-      : "Localisation MedTech";
-  } catch (error) {
-    console.error("[SUBJECT ERROR]", error);
-    return "Localisation MedTech";
-  }
-}
-
-// ============================================================================
-// STEP 4: SEND EMAIL VIA SENDGRID
-// ============================================================================
 async function sendEmail(contact, subject, body) {
   const msg = {
     to: contact.email,
     from: process.env.SENDER_EMAIL || "contact@lynelocalize.de",
     subject: subject,
-    html: `<p>${body.replace(/\n/g, "<br>")}</p>
-           <p>Cordialement,<br>
-           Christelle Datouo<br>
-           LyneLocalize</p>`,
+    html: `<p>${body.replace(/\n/g, "<br>")}</p>`,
   };
 
   try {
     await sgMail.send(msg);
-    console.log(`[SENDGRID] Email envoyé à ${contact.email}`);
+    console.log(`[SENDGRID] Email gesendet an ${contact.email}`);
     return true;
   } catch (error) {
     console.error(`[SENDGRID ERROR] ${contact.email}:`, error.message);
@@ -146,9 +132,6 @@ async function sendEmail(contact, subject, body) {
   }
 }
 
-// ============================================================================
-// STEP 5: UPDATE SUPABASE RECORD
-// ============================================================================
 async function updateSupabaseRecord(contactId) {
   const now = new Date().toISOString().split("T")[0];
   const nextFollowupDate = new Date();
@@ -165,21 +148,18 @@ async function updateSupabaseRecord(contactId) {
       })
       .eq("id", contactId);
 
-    console.log(`[SUPABASE] Contact ${contactId} mis à jour`);
+    console.log(`[SUPABASE] Contact ${contactId} aktualisiert`);
   } catch (error) {
     console.error("[SUPABASE UPDATE ERROR]", error);
   }
 }
 
-// ============================================================================
-// ORCHESTRATION PRINCIPALE
-// ============================================================================
 async function orchestrateOutreach() {
-  console.log("[START] LyneLocalize B2B Outreach Agent");
+  console.log("[START] LyneLocalize B2B Outreach Agent (TEST MODE)");
 
   const contacts = await getContactsToRelance();
   if (contacts.length === 0) {
-    console.log("[INFO] Aucun contact à relancer");
+    console.log("[INFO] Keine Kontakte zum Nachverfolgen");
     return { success: true, message: "No contacts to process" };
   }
 
@@ -188,13 +168,8 @@ async function orchestrateOutreach() {
   for (const contact of contacts) {
     console.log(`[PROCESSING] ${contact.name} (${contact.company})`);
 
-    const emailBody = await generatePersonalizedEmail(contact);
-    if (!emailBody) {
-      console.log(`[SKIP] ${contact.email}`);
-      continue;
-    }
-
-    const subject = await generateEmailSubject(contact);
+    const emailBody = generateEmailBody(contact, contact.articleToSend);
+    const subject = generateEmailSubject(contact);
     const sent = await sendEmail(contact, subject, emailBody);
 
     if (sent) {
@@ -205,13 +180,10 @@ async function orchestrateOutreach() {
     await new Promise((resolve) => setTimeout(resolve, 2000));
   }
 
-  console.log(`[COMPLETE] ${successCount}/${contacts.length} emails envoyés`);
+  console.log(`[COMPLETE] ${successCount}/${contacts.length} emails gesendet`);
   return { success: true, sent: successCount };
 }
 
-// ============================================================================
-// VERCEL CRON HANDLER
-// ============================================================================
 export default async function handler(req, res) {
   const authToken = req.headers["authorization"];
   if (authToken !== `Bearer ${process.env.CRON_SECRET}`) {

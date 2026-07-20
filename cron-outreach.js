@@ -1,16 +1,15 @@
 // ============================================================================
-// LYNELOCALIZE B2B OUTREACH AGENT - VERCEL CRON + CLAUDE + SENDGRID + AIRTABLE
+// LYNELOCALIZE B2B OUTREACH AGENT - VERCEL CRON + CLAUDE + SENDGRID + SUPABASE
 // ============================================================================
 // Déploie ça sur Vercel. Cron se déclenche tous les lundi 9h CET via /api/cron-outreach
 // ============================================================================
 
 // 1. INSTALL DEPENDENCIES
-// npm install node-fetch airtable dotenv @sendgrid/mail
+// npm install node-fetch @supabase/supabase-js dotenv @sendgrid/mail @anthropic-ai/sdk
 
 // 2. ENV VARIABLES (dans .env.local ou Vercel dashboard)
-// AIRTABLE_API_KEY=pat_xxxxx
-// AIRTABLE_BASE_ID=appXxxxx
-// AIRTABLE_TABLE_NAME=Contacts
+// SUPABASE_URL=https://xxxxx.supabase.co
+// SUPABASE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 // SENDGRID_API_KEY=SG.xxxxx
 // ANTHROPIC_API_KEY=sk-ant-xxxxx
 // SENDER_EMAIL=toi@lynelocalize.de
@@ -18,6 +17,7 @@
 const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
 const Anthropic = require("@anthropic-ai/sdk");
 const sgMail = require("@sendgrid/mail");
+const { createClient } = require("@supabase/supabase-js");
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -25,64 +25,55 @@ const anthropic = new Anthropic({
 
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
+// Initialize Supabase client
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_KEY
+);
+
 // ============================================================================
-// STEP 1: READ CONTACTS FROM AIRTABLE
+// STEP 1: READ CONTACTS FROM SUPABASE
 // ============================================================================
 async function getContactsToRelance() {
-  const baseId = process.env.AIRTABLE_BASE_ID;
-  const tableName = process.env.AIRTABLE_TABLE_NAME;
-  const apiKey = process.env.AIRTABLE_API_KEY;
-
-  const url = `https://api.airtable.com/v0/${baseId}/${tableName}`;
-  const headers = {
-    Authorization: `Bearer ${apiKey}`,
-  };
-
   try {
-    const response = await fetch(url, { headers });
-    const data = await response.json();
-    
-    // Filtre : only contacts where next_followup_date <= today
     const today = new Date().toISOString().split("T")[0];
-    const contactsToRelance = data.records
-      .filter((record) => {
-        const nextFollowup = record.fields.next_followup_date;
-        return nextFollowup && nextFollowup <= today;
-      })
-      .map((record) => ({
-        id: record.id,
-        name: record.fields.name || "Contact",
-        email: record.fields.email,
-        company: record.fields.company || "Entreprise",
-        sector: record.fields.sector || "MedTech",
-        lastContact: record.fields.last_contact || "N/A",
-        responseStatus: record.fields.response_status || "no_response",
-        articleToSend: record.fields.article_to_send || "mdr-5-risks", // Default article key
-      }));
 
-    console.log(`[AIRTABLE] ${contactsToRelance.length} contacts à relancer`);
-    return contactsToRelance;
+    // Query: fetch all contacts where next_followup_date <= today
+    const { data, error } = await supabase
+      .from("contacts")
+      .select("*")
+      .lte("next_followup_date", today);
+
+    if (error) {
+      console.error("[SUPABASE ERROR]", error);
+      return [];
+    }
+
+    const contacts = data.map((record) => ({
+      id: record.id,
+      name: record.name || "Contact",
+      email: record.email,
+      company: record.company || "Entreprise",
+      sector: record.sector || "MedTech",
+      lastContact: record.last_contact || "N/A",
+      responseStatus: record.response_status || "no_response",
+      articleToSend: record.article_to_send || "mdr-5-risks",
+    }));
+
+    console.log(`[SUPABASE] ${contacts.length} contacts à relancer`);
+    return contacts;
   } catch (error) {
-    console.error("[AIRTABLE ERROR]", error);
+    console.error("[SUPABASE QUERY ERROR]", error);
     return [];
   }
 }
 
 // ============================================================================
-// STEP 2: RESEARCH AGENT (scrape light context about company)
+// STEP 2: RESEARCH AGENT (light context about company)
 // ============================================================================
 async function researchCompany(companyName) {
   // Pour cette démo, on va simuler. En prod, tu appellerais Apify ou Cheerio
-  // Ici on utilise Claude pour interpréter une requête web simple
-  // (Dans la vraie implémentation, tu ferais un vrai scrape et tu passerais le HTML à Claude)
-
-  // Simulation : contexte simple basé sur le nom
-  const contextMap = {
-    "Default Company": "Un acteur du secteur MedTech, basé en Allemagne.",
-    // Tu peux remplir ça avec des données réelles de tes contacts
-  };
-
-  return contextMap[companyName] || `${companyName} est une entreprise MedTech. Je n'ai pas de context supplémentaire.`;
+  return `${companyName} est une entreprise MedTech. Je n'ai pas de context supplémentaire pour cette relance.`;
 }
 
 // ============================================================================
@@ -124,7 +115,8 @@ Réponds UNIQUEMENT avec le contenu de l'email (sans sujet, sans formatage, just
       ],
     });
 
-    const emailBody = message.content[0].type === "text" ? message.content[0].text : "";
+    const emailBody =
+      message.content[0].type === "text" ? message.content[0].text : "";
     return emailBody;
   } catch (error) {
     console.error("[CLAUDE ERROR]", error);
@@ -153,7 +145,9 @@ Réponds UNIQUEMENT avec le subject (sans guillemets, sans formatage).`;
       ],
     });
 
-    return message.content[0].type === "text" ? message.content[0].text.trim() : "Localisation MedTech en France";
+    return message.content[0].type === "text"
+      ? message.content[0].text.trim()
+      : "Localisation MedTech en France";
   } catch (error) {
     console.error("[SUBJECT GENERATION ERROR]", error);
     return "Localisation MedTech en France";
@@ -173,7 +167,7 @@ async function sendEmail(contact, subject, body) {
            Christelle Datouo<br>
            LyneLocalize</p>`,
     customArgs: {
-      contact_id: contact.id,
+      contact_id: contact.id.toString(),
       contact_name: contact.name,
       company: contact.company,
     },
@@ -190,39 +184,31 @@ async function sendEmail(contact, subject, body) {
 }
 
 // ============================================================================
-// STEP 6: UPDATE AIRTABLE (log sent email + next followup)
+// STEP 6: UPDATE SUPABASE RECORD
 // ============================================================================
-async function updateAirtableRecord(contactId, emailSentSuccessfully) {
-  const baseId = process.env.AIRTABLE_BASE_ID;
-  const tableName = process.env.AIRTABLE_TABLE_NAME;
-  const apiKey = process.env.AIRTABLE_API_KEY;
-
+async function updateSupabaseRecord(contactId, emailSentSuccessfully) {
   const now = new Date().toISOString().split("T")[0];
   const nextFollowupDate = new Date();
   nextFollowupDate.setDate(nextFollowupDate.getDate() + 7); // Relance dans 7 jours
   const nextFollowupStr = nextFollowupDate.toISOString().split("T")[0];
 
-  const url = `https://api.airtable.com/v0/${baseId}/${tableName}/${contactId}`;
-  const headers = {
-    Authorization: `Bearer ${apiKey}`,
-    "Content-Type": "application/json",
-  };
-
-  const fields = {
-    last_contact: now,
-    next_followup_date: nextFollowupStr,
-    response_status: "sent",
-  };
-
   try {
-    await fetch(url, {
-      method: "PATCH",
-      headers,
-      body: JSON.stringify({ fields }),
-    });
-    console.log(`[AIRTABLE] Record ${contactId} mis à jour`);
+    const { error } = await supabase
+      .from("contacts")
+      .update({
+        last_contact: now,
+        next_followup_date: nextFollowupStr,
+        response_status: "sent",
+      })
+      .eq("id", contactId);
+
+    if (error) {
+      console.error("[SUPABASE UPDATE ERROR]", error);
+    } else {
+      console.log(`[SUPABASE] Contact ${contactId} mis à jour`);
+    }
   } catch (error) {
-    console.error(`[AIRTABLE UPDATE ERROR]`, error);
+    console.error("[SUPABASE UPDATE ERROR]", error);
   }
 }
 
@@ -259,8 +245,8 @@ async function orchestrateOutreach() {
     // Step 4: Send email
     const sent = await sendEmail(contact, subject, emailBody);
     if (sent) {
-      // Step 5: Update Airtable
-      await updateAirtableRecord(contact.id, true);
+      // Step 5: Update Supabase
+      await updateSupabaseRecord(contact.id, true);
       successCount++;
     }
 
@@ -295,7 +281,7 @@ export default async function handler(req, res) {
 // ALTERNATIVE: Local testing
 // ============================================================================
 // Pour tester en local avant de déployer :
-// node lynelocalize-agent-complete.js
+// node lynelocalize-agent-supabase.js
 if (require.main === module) {
   orchestrateOutreach().catch(console.error);
 }

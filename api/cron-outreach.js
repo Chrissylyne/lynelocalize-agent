@@ -1,23 +1,11 @@
 // ============================================================================
-// LYNELOCALIZE B2B OUTREACH AGENT - VERCEL CRON + CLAUDE + SENDGRID + AIRTABLE
+// LYNELOCALIZE B2B OUTREACH AGENT - VERCEL CRON + CLAUDE + SENDGRID + SUPABASE
 // ============================================================================
-// Déploie ça sur Vercel. Cron se déclenche tous les lundi 9h CET via /api/cron-outreach
-// ============================================================================
-
-// 1. INSTALL DEPENDENCIES
-// npm install node-fetch airtable dotenv @sendgrid/mail
-
-// 2. ENV VARIABLES (dans .env.local ou Vercel dashboard)
-// AIRTABLE_API_KEY=pat_xxxxx
-// AIRTABLE_BASE_ID=appXxxxx
-// AIRTABLE_TABLE_NAME=Contacts
-// SENDGRID_API_KEY=SG.xxxxx
-// ANTHROPIC_API_KEY=sk-ant-xxxxx
-// SENDER_EMAIL=toi@lynelocalize.de
 
 const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
 const Anthropic = require("@anthropic-ai/sdk");
 const sgMail = require("@sendgrid/mail");
+const { createClient } = require("@supabase/supabase-js");
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -25,92 +13,66 @@ const anthropic = new Anthropic({
 
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_KEY
+);
+
 // ============================================================================
-// STEP 1: READ CONTACTS FROM AIRTABLE
+// STEP 1: READ CONTACTS FROM SUPABASE
 // ============================================================================
 async function getContactsToRelance() {
-  const baseId = process.env.AIRTABLE_BASE_ID;
-  const tableName = process.env.AIRTABLE_TABLE_NAME;
-  const apiKey = process.env.AIRTABLE_API_KEY;
-
-  const url = `https://api.airtable.com/v0/${baseId}/${tableName}`;
-  const headers = {
-    Authorization: `Bearer ${apiKey}`,
-  };
-
   try {
-    const response = await fetch(url, { headers });
-    const data = await response.json();
-    
-    // Filtre : only contacts where next_followup_date <= today
     const today = new Date().toISOString().split("T")[0];
-    const contactsToRelance = data.records
-      .filter((record) => {
-        const nextFollowup = record.fields.next_followup_date;
-        return nextFollowup && nextFollowup <= today;
-      })
-      .map((record) => ({
-        id: record.id,
-        name: record.fields.name || "Contact",
-        email: record.fields.email,
-        company: record.fields.company || "Entreprise",
-        sector: record.fields.sector || "MedTech",
-        lastContact: record.fields.last_contact || "N/A",
-        responseStatus: record.fields.response_status || "no_response",
-        articleToSend: record.fields.article_to_send || "mdr-5-risks", // Default article key
-      }));
 
-    console.log(`[AIRTABLE] ${contactsToRelance.length} contacts à relancer`);
-    return contactsToRelance;
+    const { data, error } = await supabase
+      .from("contacts")
+      .select("*")
+      .lte("next_followup_date", today);
+
+    if (error) {
+      console.error("[SUPABASE ERROR]", error);
+      return [];
+    }
+
+    const contacts = data.map((record) => ({
+      id: record.id,
+      name: record.name || "Contact",
+      email: record.email,
+      company: record.company || "Entreprise",
+      sector: record.sector || "MedTech",
+      lastContact: record.last_contact || "N/A",
+      responseStatus: record.response_status || "no_response",
+      articleToSend: record.article_to_send || "mdr-5-risks",
+    }));
+
+    console.log(`[SUPABASE] ${contacts.length} contacts à relancer`);
+    return contacts;
   } catch (error) {
-    console.error("[AIRTABLE ERROR]", error);
+    console.error("[SUPABASE QUERY ERROR]", error);
     return [];
   }
 }
 
 // ============================================================================
-// STEP 2: RESEARCH AGENT (scrape light context about company)
+// STEP 2: EMAIL GENERATION AGENT (Claude API)
 // ============================================================================
-async function researchCompany(companyName) {
-  // Pour cette démo, on va simuler. En prod, tu appellerais Apify ou Cheerio
-  // Ici on utilise Claude pour interpréter une requête web simple
-  // (Dans la vraie implémentation, tu ferais un vrai scrape et tu passerais le HTML à Claude)
-
-  // Simulation : contexte simple basé sur le nom
-  const contextMap = {
-    "Default Company": "Un acteur du secteur MedTech, basé en Allemagne.",
-    // Tu peux remplir ça avec des données réelles de tes contacts
-  };
-
-  return contextMap[companyName] || `${companyName} est une entreprise MedTech. Je n'ai pas de context supplémentaire.`;
-}
-
-// ============================================================================
-// STEP 3: EMAIL GENERATION AGENT (Claude API)
-// ============================================================================
-async function generatePersonalizedEmail(contact, articleContext) {
+async function generatePersonalizedEmail(contact) {
   const prompt = `Tu es un expert en outreach B2B pour une consultante en localisation MedTech.
 
-Contexte du contact:
+Contact:
 - Nom: ${contact.name}
 - Entreprise: ${contact.company}
 - Secteur: ${contact.sector}
-- Context: ${articleContext}
+- Article: ${contact.articleToSend}
 
-Article à mentionner:
-- Type: ${contact.articleToSend}
-- Si c'est "mdr-5-risks", parle des 5 risques quand une boîte MedTech entre en France
-- Si c'est "medical-software-localization", parle de l'importance de la localisation du software médical
-- Si c'est "compliance", parle de la conformité MDR en France
+Génère un email court (150-200 mots) qui:
+1. Mentionne spécifiquement le contact et son entreprise
+2. Explique pourquoi c'est pertinent pour eux
+3. Termine par un CTA soft ("je suis dispo pour discuter")
+4. Ton: français professionnel, jamais pushy, humain
 
-Génère un email court (200 mots max) qui:
-1. Mention un détail récent/spécifique du contact (basé sur le context)
-2. Explique brièvement pourquoi c'est pertinent pour eux
-3. Link subtil vers l'article (jamais "clique ici", plutôt "j'ai écrit quelque chose sur ce sujet")
-4. Termine par un CTA soft ("Si ça vous intéresse, je suis dispo pour un café virtuel")
-5. Ton: français professionnel, jamais pushy, humain
-
-Réponds UNIQUEMENT avec le contenu de l'email (sans sujet, sans formatage, juste le body).`;
+Réponds UNIQUEMENT avec le body de l'email.`;
 
   try {
     const message = await anthropic.messages.create({
@@ -124,8 +86,7 @@ Réponds UNIQUEMENT avec le contenu de l'email (sans sujet, sans formatage, just
       ],
     });
 
-    const emailBody = message.content[0].type === "text" ? message.content[0].text : "";
-    return emailBody;
+    return message.content[0].type === "text" ? message.content[0].text : null;
   } catch (error) {
     console.error("[CLAUDE ERROR]", error);
     return null;
@@ -133,13 +94,12 @@ Réponds UNIQUEMENT avec le contenu de l'email (sans sujet, sans formatage, just
 }
 
 // ============================================================================
-// STEP 4: EMAIL SUBJECT GENERATION (Claude)
+// STEP 3: EMAIL SUBJECT GENERATION (Claude)
 // ============================================================================
 async function generateEmailSubject(contact) {
-  const prompt = `Génère un subject line court (5-8 mots) pour un email de outreach vers ${contact.name} (${contact.company}).
-Ton: professionnel mais personnel, jamais spammy.
-Basé sur: ils travaillent en MedTech et on veut les inviter à lire un article sur les risques/localisation.
-Réponds UNIQUEMENT avec le subject (sans guillemets, sans formatage).`;
+  const prompt = `Génère un subject line court (5-8 mots) pour un email vers ${contact.name} (${contact.company}).
+Ton: professionnel mais personnel.
+Réponds UNIQUEMENT avec le subject.`;
 
   try {
     const message = await anthropic.messages.create({
@@ -153,15 +113,17 @@ Réponds UNIQUEMENT avec le subject (sans guillemets, sans formatage).`;
       ],
     });
 
-    return message.content[0].type === "text" ? message.content[0].text.trim() : "Localisation MedTech en France";
+    return message.content[0].type === "text"
+      ? message.content[0].text.trim()
+      : "Localisation MedTech";
   } catch (error) {
-    console.error("[SUBJECT GENERATION ERROR]", error);
-    return "Localisation MedTech en France";
+    console.error("[SUBJECT ERROR]", error);
+    return "Localisation MedTech";
   }
 }
 
 // ============================================================================
-// STEP 5: SEND EMAIL VIA SENDGRID
+// STEP 4: SEND EMAIL VIA SENDGRID
 // ============================================================================
 async function sendEmail(contact, subject, body) {
   const msg = {
@@ -172,11 +134,6 @@ async function sendEmail(contact, subject, body) {
            <p>Cordialement,<br>
            Christelle Datouo<br>
            LyneLocalize</p>`,
-    customArgs: {
-      contact_id: contact.id,
-      contact_name: contact.name,
-      company: contact.company,
-    },
   };
 
   try {
@@ -190,39 +147,27 @@ async function sendEmail(contact, subject, body) {
 }
 
 // ============================================================================
-// STEP 6: UPDATE AIRTABLE (log sent email + next followup)
+// STEP 5: UPDATE SUPABASE RECORD
 // ============================================================================
-async function updateAirtableRecord(contactId, emailSentSuccessfully) {
-  const baseId = process.env.AIRTABLE_BASE_ID;
-  const tableName = process.env.AIRTABLE_TABLE_NAME;
-  const apiKey = process.env.AIRTABLE_API_KEY;
-
+async function updateSupabaseRecord(contactId) {
   const now = new Date().toISOString().split("T")[0];
   const nextFollowupDate = new Date();
-  nextFollowupDate.setDate(nextFollowupDate.getDate() + 7); // Relance dans 7 jours
+  nextFollowupDate.setDate(nextFollowupDate.getDate() + 7);
   const nextFollowupStr = nextFollowupDate.toISOString().split("T")[0];
 
-  const url = `https://api.airtable.com/v0/${baseId}/${tableName}/${contactId}`;
-  const headers = {
-    Authorization: `Bearer ${apiKey}`,
-    "Content-Type": "application/json",
-  };
-
-  const fields = {
-    last_contact: now,
-    next_followup_date: nextFollowupStr,
-    response_status: "sent",
-  };
-
   try {
-    await fetch(url, {
-      method: "PATCH",
-      headers,
-      body: JSON.stringify({ fields }),
-    });
-    console.log(`[AIRTABLE] Record ${contactId} mis à jour`);
+    await supabase
+      .from("contacts")
+      .update({
+        last_contact: now,
+        next_followup_date: nextFollowupStr,
+        response_status: "sent",
+      })
+      .eq("id", contactId);
+
+    console.log(`[SUPABASE] Contact ${contactId} mis à jour`);
   } catch (error) {
-    console.error(`[AIRTABLE UPDATE ERROR]`, error);
+    console.error("[SUPABASE UPDATE ERROR]", error);
   }
 }
 
@@ -234,49 +179,40 @@ async function orchestrateOutreach() {
 
   const contacts = await getContactsToRelance();
   if (contacts.length === 0) {
-    console.log("[INFO] Aucun contact à relancer aujourd'hui");
+    console.log("[INFO] Aucun contact à relancer");
     return { success: true, message: "No contacts to process" };
   }
 
   let successCount = 0;
 
   for (const contact of contacts) {
-    console.log(`\n[PROCESSING] ${contact.name} (${contact.company})`);
+    console.log(`[PROCESSING] ${contact.name} (${contact.company})`);
 
-    // Step 1: Research context
-    const context = await researchCompany(contact.company);
-
-    // Step 2: Generate email body
-    const emailBody = await generatePersonalizedEmail(contact, context);
+    const emailBody = await generatePersonalizedEmail(contact);
     if (!emailBody) {
-      console.log(`[SKIP] Impossible de générer l'email pour ${contact.email}`);
+      console.log(`[SKIP] ${contact.email}`);
       continue;
     }
 
-    // Step 3: Generate subject
     const subject = await generateEmailSubject(contact);
-
-    // Step 4: Send email
     const sent = await sendEmail(contact, subject, emailBody);
+
     if (sent) {
-      // Step 5: Update Airtable
-      await updateAirtableRecord(contact.id, true);
+      await updateSupabaseRecord(contact.id);
       successCount++;
     }
 
-    // Anti-rate-limit: wait 2 seconds between emails
     await new Promise((resolve) => setTimeout(resolve, 2000));
   }
 
-  console.log(`\n[COMPLETE] ${successCount}/${contacts.length} emails envoyés`);
-  return { success: true, sent: successCount, total: contacts.length };
+  console.log(`[COMPLETE] ${successCount}/${contacts.length} emails envoyés`);
+  return { success: true, sent: successCount };
 }
 
 // ============================================================================
 // VERCEL CRON HANDLER
 // ============================================================================
 export default async function handler(req, res) {
-  // Sécurité : vérifier que c'est un appel autorisé (optionnel mais recommandé)
   const authToken = req.headers["authorization"];
   if (authToken !== `Bearer ${process.env.CRON_SECRET}`) {
     return res.status(401).json({ error: "Unauthorized" });
@@ -290,13 +226,3 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: error.message });
   }
 }
-
-// ============================================================================
-// ALTERNATIVE: Local testing
-// ============================================================================
-// Pour tester en local avant de déployer :
-// node lynelocalize-agent-complete.js
-if (require.main === module) {
-  orchestrateOutreach().catch(console.error);
-}
-

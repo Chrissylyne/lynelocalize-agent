@@ -24,9 +24,9 @@ function getSalutation(fullName) {
 
 function getArticleLink(articleType) {
   const links = {
-    "mdr-5-risks": "https://lynelocalize.de/articles/mdr-5-risks",
-    "medical-software-localization": "https://lynelocalize.de/articles/medical-software-localization",
-    "compliance": "https://lynelocalize.de/articles/compliance"
+    "mdr-5-risks": "https://lynelocalize.de/de/article-2-5-risiken-beim-eintritt",
+    "medical-software-localization": "https://lynelocalize.de/de/article-1-medizinische-software-lokalisierung",
+    "compliance": "https://lynelocalize.de/de/article-3-mdr-und-lokalisierung"
   };
   return links[articleType] || "https://lynelocalize.de";
 }

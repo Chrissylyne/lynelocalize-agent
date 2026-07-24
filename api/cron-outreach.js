@@ -8,13 +8,11 @@ const supabase = createClient(
   process.env.SUPABASE_KEY
 );
 
-// Extract last name from full name
 function getLastName(fullName) {
   const parts = fullName.trim().split(" ");
   return parts[parts.length - 1];
 }
 
-// Detect salutation (Herr/Frau)
 function getSalutation(fullName) {
   const femaleNames = ["Eda", "Ramona", "Stefanie"];
   const firstName = fullName.trim().split(" ")[0];
@@ -24,7 +22,6 @@ function getSalutation(fullName) {
   return "Herr";
 }
 
-// Generate article link based on type
 function getArticleLink(articleType) {
   const links = {
     "mdr-5-risks": "https://lynelocalize.de/articles/mdr-5-risks",
@@ -34,8 +31,8 @@ function getArticleLink(articleType) {
   return links[articleType] || "https://lynelocalize.de";
 }
 
-// TEST MODE: Deutschsprachige Templates (personalisiert mit Namen + Links)
-function generateEmailBody(contact, articleType) {
+// EMAIL 1: INTRODUCTION (Relance 0)
+function generateEmailBody1(contact, articleType) {
   const lastName = getLastName(contact.name);
   const salutation = `${getSalutation(contact.name)} ${lastName}`;
   const articleLink = getArticleLink(articleType);
@@ -87,6 +84,123 @@ LyneLocalize`,
   return templates[articleType] || templates["mdr-5-risks"];
 }
 
+// EMAIL 2: FOLLOW-UP RELEVANCE (Relance 1)
+function generateEmailBody2(contact, articleType) {
+  const lastName = getLastName(contact.name);
+  const salutation = `${getSalutation(contact.name)} ${lastName}`;
+  const articleLink = getArticleLink(articleType);
+
+  const templates = {
+    "mdr-5-risks": `Hallo ${salutation},
+
+ich bin zurück – nicht weil ich nervös bin, sondern weil ich regelmäßig sehe, dass deutsche MedTech-Firmen Wochen (und tausende Euro) bei der Frankreich-Expansion verschwenden.
+
+Die Fehler, die ich dokumentiert habe, kosten durchschnittlich:
+- 8 Wochen Verzögerung
+- €15-30K Beratungskosten
+- Regulatorische Risiken, die später teuer werden
+
+Haben Sie den Artikel gelesen? Falls ja und Sie interessiert sind – rufen Sie mich an. Falls nein – hier ist der Link nochmal: ${articleLink}
+
+Ich bin diese Woche verfügbar.
+
+Viele Grüße,
+Christelle Datouo
+LyneLocalize`,
+
+    "medical-software-localization": `Hallo ${salutation},
+
+kleine Frage: Haben Sie den Artikel zur Software-Lokalisierung gelesen?
+
+Der Grund ich frage: Viele Firmen unterschätzen, dass französische Regulierung für Medical Software ANDERS ist als die deutschen Standards. Das kostet später Zeit und Kosten.
+
+Meine Empfehlung: Lesen Sie den Artikel und sagen Sie mir, ob das für Sie relevant ist: ${articleLink}
+
+Falls ja – können wir einen kurzen Call vereinbaren (15 Min). Falls nein – verstanden.
+
+Christelle Datouo
+LyneLocalize`,
+
+    "compliance": `Hallo ${salutation},
+
+schnelle Frage: Wie weit seid ihr bei MDR-Konformität für Frankreich?
+
+Der Grund ich frage: Viele Firmen warten bis zum letzten Moment, dann gibt es Überraschungen.
+
+Ich habe eine Checkliste dokumentiert, die euch 6-8 Wochen sparen kann: ${articleLink}
+
+Worth a look?
+
+Christelle
+LyneLocalize`,
+  };
+
+  return templates[articleType] || templates["mdr-5-risks"];
+}
+
+// EMAIL 3: LAST CHANCE (Relance 2)
+function generateEmailBody3(contact, articleType) {
+  const lastName = getLastName(contact.name);
+  const salutation = `${getSalutation(contact.name)} ${lastName}`;
+
+  const templates = {
+    "mdr-5-risks": `Hallo ${salutation},
+
+letzte Nachricht von mir.
+
+Ich sehe, dass Sie nicht geantwortet haben. Entweder:
+1. Nicht interessiert (verstanden, kein Problem)
+2. Zu beschäftigt (ich verstehe es, macht passiert)
+3. Nicht das Richtige für Sie
+
+Falls (2) oder (3): Ich bin diese Woche frei für einen kurzen Call. Keine Verkaufsmasche – nur 15 Minuten, um zu sehen, ob wir zusammenpassen.
+
+Zeitslots: Montag-Freitag, 14-16 Uhr CEST
+Kalender: https://lynelocalize.de
+
+Falls Ihr Timing kompliziert ist: kontaktieren Sie mich direkt.
+
+Sonst viel Erfolg bei der Frankreich-Expansion!
+
+Christelle
+LyneLocalize`,
+
+    "medical-software-localization": `Hallo ${salutation},
+
+das ist meine letzte Nachricht.
+
+Falls Sie Interesse an Software-Lokalisierung für Frankreich haben: Hier sind meine freien Slots diese Woche.
+
+Falls nicht: Alles klar, viel Erfolg!
+
+https://lynelocalize.de
+
+Christelle`,
+
+    "compliance": `Hallo ${salutation},
+
+last attempt.
+
+Wenn MDR-Compliance auf Ihrer Prioritätenliste steht – ich kann helfen. Wenn nicht – alles Gute!
+
+Christelle
+LyneLocalize`,
+  };
+
+  return templates[articleType] || templates["mdr-5-risks"];
+}
+
+// Select the right template based on relance_count
+function generateEmailBody(contact, articleType, relanceCount) {
+  if (relanceCount === 0) {
+    return generateEmailBody1(contact, articleType);
+  } else if (relanceCount === 1) {
+    return generateEmailBody2(contact, articleType);
+  } else {
+    return generateEmailBody3(contact, articleType);
+  }
+}
+
 async function getContactsToRelance() {
   try {
     const today = new Date().toISOString().split("T")[0];
@@ -110,6 +224,7 @@ async function getContactsToRelance() {
       lastContact: record.last_contact || "N/A",
       responseStatus: record.response_status || "no_response",
       articleToSend: record.article_to_send || "mdr-5-risks",
+      relanceCount: record.relance_count || 0,
     }));
 
     console.log(`[SUPABASE] ${contacts.length} contacts à relancer`);
@@ -120,13 +235,22 @@ async function getContactsToRelance() {
   }
 }
 
-function generateEmailSubject(contact) {
-  const subjects = [
-    `Markteintritt Frankreich: Regulatorische Sicherheit für ${contact.company}`,
-    `Schnelle Frage zu Ihrer Frankreich-Strategie`,
-    `MDR-Compliance in Frankreich: Was Sie wissen sollten`,
-  ];
-  return subjects[contact.id % subjects.length];
+function generateEmailSubject(contact, relanceCount) {
+  if (relanceCount === 0) {
+    // First email: introduction
+    const subjects = [
+      `Markteintritt Frankreich: Regulatorische Sicherheit für ${contact.company}`,
+      `Schnelle Frage zu Ihrer Frankreich-Strategie`,
+      `MDR-Compliance in Frankreich: Was Sie wissen sollten`,
+    ];
+    return subjects[contact.id % subjects.length];
+  } else if (relanceCount === 1) {
+    // Second email: follow-up
+    return `[Folgefrage] Frankreich-Expansion für ${contact.company}`;
+  } else {
+    // Third email: last chance
+    return `Letzte Gelegenheit: ${contact.company} + Frankreich`;
+  }
 }
 
 async function sendEmail(contact, subject, body) {
@@ -147,7 +271,7 @@ async function sendEmail(contact, subject, body) {
   }
 }
 
-async function updateSupabaseRecord(contactId) {
+async function updateSupabaseRecord(contactId, relanceCount) {
   const now = new Date().toISOString().split("T")[0];
   const nextFollowupDate = new Date();
   nextFollowupDate.setDate(nextFollowupDate.getDate() + 7);
@@ -160,17 +284,18 @@ async function updateSupabaseRecord(contactId) {
         last_contact: now,
         next_followup_date: nextFollowupStr,
         response_status: "sent",
+        relance_count: relanceCount + 1,
       })
       .eq("id", contactId);
 
-    console.log(`[SUPABASE] Contact ${contactId} aktualisiert`);
+    console.log(`[SUPABASE] Contact ${contactId} aktualisiert (relance_count: ${relanceCount + 1})`);
   } catch (error) {
     console.error("[SUPABASE UPDATE ERROR]", error);
   }
 }
 
 async function orchestrateOutreach() {
-  console.log("[START] LyneLocalize B2B Outreach Agent (TEST MODE)");
+  console.log("[START] LyneLocalize B2B Outreach Agent (3-EMAIL SEQUENCE)");
 
   const contacts = await getContactsToRelance();
   if (contacts.length === 0) {
@@ -181,14 +306,14 @@ async function orchestrateOutreach() {
   let successCount = 0;
 
   for (const contact of contacts) {
-    console.log(`[PROCESSING] ${contact.name} (${contact.company})`);
+    console.log(`[PROCESSING] ${contact.name} (${contact.company}) - Relance #${contact.relanceCount}`);
 
-    const emailBody = generateEmailBody(contact, contact.articleToSend);
-    const subject = generateEmailSubject(contact);
+    const emailBody = generateEmailBody(contact, contact.articleToSend, contact.relanceCount);
+    const subject = generateEmailSubject(contact, contact.relanceCount);
     const sent = await sendEmail(contact, subject, emailBody);
 
     if (sent) {
-      await updateSupabaseRecord(contact.id);
+      await updateSupabaseRecord(contact.id, contact.relanceCount);
       successCount++;
     }
 

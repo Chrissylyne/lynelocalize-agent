@@ -14,9 +14,8 @@ function getLastName(fullName) {
   return parts[parts.length - 1];
 }
 
-// Detect salutation (Herr/Frau) - basic gender detection
+// Detect salutation (Herr/Frau)
 function getSalutation(fullName) {
-  // Frauennamen detection (simplified)
   const femaleNames = ["Eda", "Ramona", "Stefanie"];
   const firstName = fullName.trim().split(" ")[0];
   if (femaleNames.includes(firstName)) {
@@ -25,14 +24,24 @@ function getSalutation(fullName) {
   return "Herr";
 }
 
-// TEST MODE: Deutschsprachige Templates (personalisiert mit Namen)
+// Generate article link based on type
+function getArticleLink(articleType) {
+  const links = {
+    "mdr-5-risks": "https://lynelocalize.de/articles/mdr-5-risks",
+    "medical-software-localization": "https://lynelocalize.de/articles/medical-software-localization",
+    "compliance": "https://lynelocalize.de/articles/compliance"
+  };
+  return links[articleType] || "https://lynelocalize.de";
+}
+
+// TEST MODE: Deutschsprachige Templates (personalisiert mit Namen + Links)
 function generateEmailBody(contact, articleType) {
   const lastName = getLastName(contact.name);
-  const salutation = getSalutation(contact.name);
-  const greeting = `${salutation} ${lastName}`;
+  const salutation = `${getSalutation(contact.name)} ${lastName}`;
+  const articleLink = getArticleLink(articleType);
 
   const templates = {
-    "mdr-5-risks": `Hallo ${greeting},
+    "mdr-5-risks": `Hallo ${salutation},
 
 ich habe beobachtet, dass ${contact.company} aktiv auf dem französischen Markt wächst. Ein Markteintritt in Frankreich mit einer eigenen Filiale ist eine ausgezeichnete Entscheidung, führt aber auch oft zu regulatorischen Herausforderungen.
 
@@ -40,11 +49,13 @@ Ich habe einen Artikel über die 5 häufigsten Fehler geschrieben, die deutsche 
 
 Falls interessant, bin ich gerne verfügbar für ein Gespräch.
 
+Lesen Sie den vollständigen Artikel hier: ${articleLink}
+
 Viele Grüße,
 Christelle Datouo
 LyneLocalize`,
 
-    "medical-software-localization": `Hallo ${greeting},
+    "medical-software-localization": `Hallo ${salutation},
 
 Sie haben kritische Software-Tools für medizinische Anwendungen. Eine Lokalisierung ins Französische ist nicht nur Übersetzung, sondern erfordert Anpassung von Compliance, UX und lokaler Regulierung.
 
@@ -52,17 +63,21 @@ Ich habe einen Artikel geschrieben, warum Software-Lokalisierung für medizinisc
 
 Falls Sie daran interessiert sind, können Sie mich gerne kontaktieren.
 
+Lesen Sie den vollständigen Artikel hier: ${articleLink}
+
 Viele Grüße,
 Christelle Datouo
 LyneLocalize`,
 
-    "compliance": `Hallo ${greeting},
+    "compliance": `Hallo ${salutation},
 
 MDR-Konformität in Frankreich ist nicht nur administrativ – es ist Ihr Markteintritts-Ticket. Ich habe viele Unternehmen wie ${contact.company} gesehen, die 6 Monate bei der Dokumentation verlieren.
 
 Ich habe diesen Prozess für mehrere Unternehmen Ihrer Kategorie implementiert. Ich kenne die Best Practices und was zu viel kostet.
 
 Falls Sie interessiert sind, wie Sie das beschleunigen können, helfe ich gerne.
+
+Lesen Sie den vollständigen Artikel hier: ${articleLink}
 
 Viele Grüße,
 Christelle Datouo

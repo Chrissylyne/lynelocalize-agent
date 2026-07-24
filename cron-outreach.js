@@ -1,44 +1,96 @@
-// ============================================================================
-// LYNELOCALIZE B2B OUTREACH AGENT - VERCEL CRON + CLAUDE + SENDGRID + SUPABASE
-// ============================================================================
-// Déploie ça sur Vercel. Cron se déclenche tous les lundi 9h CET via /api/cron-outreach
-// ============================================================================
-
-// 1. INSTALL DEPENDENCIES
-// npm install node-fetch @supabase/supabase-js dotenv @sendgrid/mail @anthropic-ai/sdk
-
-// 2. ENV VARIABLES (dans .env.local ou Vercel dashboard)
-// SUPABASE_URL=https://xxxxx.supabase.co
-// SUPABASE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-// SENDGRID_API_KEY=SG.xxxxx
-// ANTHROPIC_API_KEY=sk-ant-xxxxx
-// SENDER_EMAIL=toi@lynelocalize.de
-
-const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
-const Anthropic = require("@anthropic-ai/sdk");
 const sgMail = require("@sendgrid/mail");
 const { createClient } = require("@supabase/supabase-js");
 
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
-
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
-// Initialize Supabase client
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_KEY
 );
 
-// ============================================================================
-// STEP 1: READ CONTACTS FROM SUPABASE
-// ============================================================================
+// Extract last name from full name
+function getLastName(fullName) {
+  const parts = fullName.trim().split(" ");
+  return parts[parts.length - 1];
+}
+
+// Detect salutation (Herr/Frau)
+function getSalutation(fullName) {
+  const femaleNames = ["Eda", "Ramona", "Stefanie"];
+  const firstName = fullName.trim().split(" ")[0];
+  if (femaleNames.includes(firstName)) {
+    return "Frau";
+  }
+  return "Herr";
+}
+
+// Generate article link based on type
+function getArticleLink(articleType) {
+  const links = {
+    "mdr-5-risks": "https://lynelocalize.de/articles/mdr-5-risks",
+    "medical-software-localization": "https://lynelocalize.de/articles/medical-software-localization",
+    "compliance": "https://lynelocalize.de/articles/compliance"
+  };
+  return links[articleType] || "https://lynelocalize.de";
+}
+
+// TEST MODE: Deutschsprachige Templates (personalisiert mit Namen + Links)
+function generateEmailBody(contact, articleType) {
+  const lastName = getLastName(contact.name);
+  const salutation = `${getSalutation(contact.name)} ${lastName}`;
+  const articleLink = getArticleLink(articleType);
+
+  const templates = {
+    "mdr-5-risks": `Hallo ${salutation},
+
+ich habe beobachtet, dass ${contact.company} aktiv auf dem französischen Markt wächst. Ein Markteintritt in Frankreich mit einer eigenen Filiale ist eine ausgezeichnete Entscheidung, führt aber auch oft zu regulatorischen Herausforderungen.
+
+Ich habe einen Artikel über die 5 häufigsten Fehler geschrieben, die deutsche MedTech-Unternehmen beim Eintritt in Frankreich machen. Basierend auf 10 Jahren Erfahrung.
+
+Falls interessant, bin ich gerne verfügbar für ein Gespräch.
+
+Lesen Sie den vollständigen Artikel hier: ${articleLink}
+
+Viele Grüße,
+Christelle Datouo
+LyneLocalize`,
+
+    "medical-software-localization": `Hallo ${salutation},
+
+Sie haben kritische Software-Tools für medizinische Anwendungen. Eine Lokalisierung ins Französische ist nicht nur Übersetzung, sondern erfordert Anpassung von Compliance, UX und lokaler Regulierung.
+
+Ich habe einen Artikel geschrieben, warum Software-Lokalisierung für medizinische Geräte anders sein muss. Das deckt exakt ab, was Sie bei ${contact.company} jetzt durchlaufen.
+
+Falls Sie daran interessiert sind, können Sie mich gerne kontaktieren.
+
+Lesen Sie den vollständigen Artikel hier: ${articleLink}
+
+Viele Grüße,
+Christelle Datouo
+LyneLocalize`,
+
+    "compliance": `Hallo ${salutation},
+
+MDR-Konformität in Frankreich ist nicht nur administrativ – es ist Ihr Markteintritts-Ticket. Ich habe viele Unternehmen wie ${contact.company} gesehen, die 6 Monate bei der Dokumentation verlieren.
+
+Ich habe diesen Prozess für mehrere Unternehmen Ihrer Kategorie implementiert. Ich kenne die Best Practices und was zu viel kostet.
+
+Falls Sie interessiert sind, wie Sie das beschleunigen können, helfe ich gerne.
+
+Lesen Sie den vollständigen Artikel hier: ${articleLink}
+
+Viele Grüße,
+Christelle Datouo
+LyneLocalize`,
+  };
+
+  return templates[articleType] || templates["mdr-5-risks"];
+}
+
 async function getContactsToRelance() {
   try {
     const today = new Date().toISOString().split("T")[0];
 
-    // Query: fetch all contacts where next_followup_date <= today
     const { data, error } = await supabase
       .from("contacts")
       .select("*")
@@ -53,7 +105,7 @@ async function getContactsToRelance() {
       id: record.id,
       name: record.name || "Contact",
       email: record.email,
-      company: record.company || "Entreprise",
+      company: record.company || "Unternehmen",
       sector: record.sector || "MedTech",
       lastContact: record.last_contact || "N/A",
       responseStatus: record.response_status || "no_response",
@@ -68,114 +120,26 @@ async function getContactsToRelance() {
   }
 }
 
-// ============================================================================
-// STEP 2: RESEARCH AGENT (light context about company)
-// ============================================================================
-async function researchCompany(companyName) {
-  // Pour cette démo, on va simuler. En prod, tu appellerais Apify ou Cheerio
-  return `${companyName} est une entreprise MedTech. Je n'ai pas de context supplémentaire pour cette relance.`;
+function generateEmailSubject(contact) {
+  const subjects = [
+    `Markteintritt Frankreich: Regulatorische Sicherheit für ${contact.company}`,
+    `Schnelle Frage zu Ihrer Frankreich-Strategie`,
+    `MDR-Compliance in Frankreich: Was Sie wissen sollten`,
+  ];
+  return subjects[contact.id % subjects.length];
 }
 
-// ============================================================================
-// STEP 3: EMAIL GENERATION AGENT (Claude API)
-// ============================================================================
-async function generatePersonalizedEmail(contact, articleContext) {
-  const prompt = `Tu es un expert en outreach B2B pour une consultante en localisation MedTech.
-
-Contexte du contact:
-- Nom: ${contact.name}
-- Entreprise: ${contact.company}
-- Secteur: ${contact.sector}
-- Context: ${articleContext}
-
-Article à mentionner:
-- Type: ${contact.articleToSend}
-- Si c'est "mdr-5-risks", parle des 5 risques quand une boîte MedTech entre en France
-- Si c'est "medical-software-localization", parle de l'importance de la localisation du software médical
-- Si c'est "compliance", parle de la conformité MDR en France
-
-Génère un email court (200 mots max) qui:
-1. Mention un détail récent/spécifique du contact (basé sur le context)
-2. Explique brièvement pourquoi c'est pertinent pour eux
-3. Link subtil vers l'article (jamais "clique ici", plutôt "j'ai écrit quelque chose sur ce sujet")
-4. Termine par un CTA soft ("Si ça vous intéresse, je suis dispo pour un café virtuel")
-5. Ton: français professionnel, jamais pushy, humain
-
-Réponds UNIQUEMENT avec le contenu de l'email (sans sujet, sans formatage, juste le body).`;
-
-  try {
-    const message = await anthropic.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 500,
-      messages: [
-        {
-          role: "user",
-          content: prompt,
-        },
-      ],
-    });
-
-    const emailBody =
-      message.content[0].type === "text" ? message.content[0].text : "";
-    return emailBody;
-  } catch (error) {
-    console.error("[CLAUDE ERROR]", error);
-    return null;
-  }
-}
-
-// ============================================================================
-// STEP 4: EMAIL SUBJECT GENERATION (Claude)
-// ============================================================================
-async function generateEmailSubject(contact) {
-  const prompt = `Génère un subject line court (5-8 mots) pour un email de outreach vers ${contact.name} (${contact.company}).
-Ton: professionnel mais personnel, jamais spammy.
-Basé sur: ils travaillent en MedTech et on veut les inviter à lire un article sur les risques/localisation.
-Réponds UNIQUEMENT avec le subject (sans guillemets, sans formatage).`;
-
-  try {
-    const message = await anthropic.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 50,
-      messages: [
-        {
-          role: "user",
-          content: prompt,
-        },
-      ],
-    });
-
-    return message.content[0].type === "text"
-      ? message.content[0].text.trim()
-      : "Localisation MedTech en France";
-  } catch (error) {
-    console.error("[SUBJECT GENERATION ERROR]", error);
-    return "Localisation MedTech en France";
-  }
-}
-
-// ============================================================================
-// STEP 5: SEND EMAIL VIA SENDGRID
-// ============================================================================
 async function sendEmail(contact, subject, body) {
   const msg = {
     to: contact.email,
     from: process.env.SENDER_EMAIL || "contact@lynelocalize.de",
     subject: subject,
-    html: `<p>${body.replace(/\n/g, "<br>")}</p>
-           <p>Cordialement,<br>
-           Christelle Datouo<br>
-           LyneLocalize</p>`,
-    customArgs: {
-      contact_id: contact.id.toString(),
-      contact_name: contact.name,
-      company: contact.company,
-    },
+    html: `<p>${body.replace(/\n/g, "<br>")}</p>`,
   };
 
   try {
     await sgMail.send(msg);
-    console.log(`[SENDGRID] Email envoyé à ${contact.email}`);
+    console.log(`[SENDGRID] Email gesendet an ${contact.email}`);
     return true;
   } catch (error) {
     console.error(`[SENDGRID ERROR] ${contact.email}:`, error.message);
@@ -183,17 +147,14 @@ async function sendEmail(contact, subject, body) {
   }
 }
 
-// ============================================================================
-// STEP 6: UPDATE SUPABASE RECORD
-// ============================================================================
-async function updateSupabaseRecord(contactId, emailSentSuccessfully) {
+async function updateSupabaseRecord(contactId) {
   const now = new Date().toISOString().split("T")[0];
   const nextFollowupDate = new Date();
-  nextFollowupDate.setDate(nextFollowupDate.getDate() + 7); // Relance dans 7 jours
+  nextFollowupDate.setDate(nextFollowupDate.getDate() + 7);
   const nextFollowupStr = nextFollowupDate.toISOString().split("T")[0];
 
   try {
-    const { error } = await supabase
+    await supabase
       .from("contacts")
       .update({
         last_contact: now,
@@ -202,67 +163,43 @@ async function updateSupabaseRecord(contactId, emailSentSuccessfully) {
       })
       .eq("id", contactId);
 
-    if (error) {
-      console.error("[SUPABASE UPDATE ERROR]", error);
-    } else {
-      console.log(`[SUPABASE] Contact ${contactId} mis à jour`);
-    }
+    console.log(`[SUPABASE] Contact ${contactId} aktualisiert`);
   } catch (error) {
     console.error("[SUPABASE UPDATE ERROR]", error);
   }
 }
 
-// ============================================================================
-// ORCHESTRATION PRINCIPALE
-// ============================================================================
 async function orchestrateOutreach() {
-  console.log("[START] LyneLocalize B2B Outreach Agent");
+  console.log("[START] LyneLocalize B2B Outreach Agent (TEST MODE)");
 
   const contacts = await getContactsToRelance();
   if (contacts.length === 0) {
-    console.log("[INFO] Aucun contact à relancer aujourd'hui");
+    console.log("[INFO] Keine Kontakte zum Nachverfolgen");
     return { success: true, message: "No contacts to process" };
   }
 
   let successCount = 0;
 
   for (const contact of contacts) {
-    console.log(`\n[PROCESSING] ${contact.name} (${contact.company})`);
+    console.log(`[PROCESSING] ${contact.name} (${contact.company})`);
 
-    // Step 1: Research context
-    const context = await researchCompany(contact.company);
-
-    // Step 2: Generate email body
-    const emailBody = await generatePersonalizedEmail(contact, context);
-    if (!emailBody) {
-      console.log(`[SKIP] Impossible de générer l'email pour ${contact.email}`);
-      continue;
-    }
-
-    // Step 3: Generate subject
-    const subject = await generateEmailSubject(contact);
-
-    // Step 4: Send email
+    const emailBody = generateEmailBody(contact, contact.articleToSend);
+    const subject = generateEmailSubject(contact);
     const sent = await sendEmail(contact, subject, emailBody);
+
     if (sent) {
-      // Step 5: Update Supabase
-      await updateSupabaseRecord(contact.id, true);
+      await updateSupabaseRecord(contact.id);
       successCount++;
     }
 
-    // Anti-rate-limit: wait 2 seconds between emails
     await new Promise((resolve) => setTimeout(resolve, 2000));
   }
 
-  console.log(`\n[COMPLETE] ${successCount}/${contacts.length} emails envoyés`);
-  return { success: true, sent: successCount, total: contacts.length };
+  console.log(`[COMPLETE] ${successCount}/${contacts.length} emails gesendet`);
+  return { success: true, sent: successCount };
 }
 
-// ============================================================================
-// VERCEL CRON HANDLER
-// ============================================================================
 export default async function handler(req, res) {
-  // Sécurité : vérifier que c'est un appel autorisé (optionnel mais recommandé)
   const authToken = req.headers["authorization"];
   if (authToken !== `Bearer ${process.env.CRON_SECRET}`) {
     return res.status(401).json({ error: "Unauthorized" });
@@ -275,13 +212,4 @@ export default async function handler(req, res) {
     console.error("[HANDLER ERROR]", error);
     return res.status(500).json({ error: error.message });
   }
-}
-
-// ============================================================================
-// ALTERNATIVE: Local testing
-// ============================================================================
-// Pour tester en local avant de déployer :
-// node lynelocalize-agent-supabase.js
-if (require.main === module) {
-  orchestrateOutreach().catch(console.error);
 }
